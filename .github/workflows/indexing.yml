@@ -1,4 +1,4 @@
-name: Promixt Indexing
+name: Promixt Google Indexing
 
 on:
   workflow_dispatch:
@@ -11,17 +11,17 @@ jobs:
 
     steps:
 
-      # =========================================================
-      # 1) Install Google authentication library
-      # =========================================================
+      # ==========================================
+      # 1. Install dependencies
+      # ==========================================
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install google-auth requests
 
-      # =========================================================
-      # 2) REAL Google Search Console sitemap submission
-      # =========================================================
+      # ==========================================
+      # 2. Submit sitemap to Google Search Console
+      # ==========================================
       - name: Submit Sitemap to Google Search Console
         env:
           GOOGLE_PROJECT_ID: ${{ secrets.GOOGLE_PROJECT_ID }}
@@ -44,27 +44,40 @@ jobs:
           print("Site:", SITE)
           print("Sitemap:", SITEMAP)
 
-          # Build service-account credentials from GitHub Secrets
+          # --------------------------------------
+          # Create Google service-account credentials
+          # --------------------------------------
+          private_key = os.environ["GOOGLE_PRIVATE_KEY"]
+
+          # Handle escaped newlines safely
+          private_key = private_key.replace("\\n", "\n")
+
           info = {
               "type": "service_account",
               "project_id": os.environ["GOOGLE_PROJECT_ID"],
-              "private_key": os.environ["GOOGLE_PRIVATE_KEY"].replace("\\n", "\n"),
+              "private_key": private_key,
               "client_email": os.environ["GOOGLE_CLIENT_EMAIL"],
               "token_uri": "https://oauth2.googleapis.com/token"
           }
 
           credentials = service_account.Credentials.from_service_account_info(
               info,
-              scopes=["https://www.googleapis.com/auth/webmasters"]
+              scopes=[
+                  "https://www.googleapis.com/auth/webmasters"
+              ]
           )
 
-          # Get OAuth access token
+          # --------------------------------------
+          # Authenticate
+          # --------------------------------------
           credentials.refresh(Request())
 
           print("Authentication: OK")
           print("Service account:", os.environ["GOOGLE_CLIENT_EMAIL"])
 
+          # --------------------------------------
           # Google Search Console Sitemaps API
+          # --------------------------------------
           endpoint = (
               "https://www.googleapis.com/webmasters/v3/sites/"
               + quote(SITE, safe="")
@@ -85,13 +98,18 @@ jobs:
           if response.status_code not in (200, 204):
               print("Google response:")
               print(response.text)
+
               raise SystemExit(
                   "ERROR: Google Search Console sitemap submission failed."
               )
 
+          print("")
           print("SUCCESS: Sitemap submitted to Google Search Console.")
+          print("")
 
-          # Verify sitemap information
+          # --------------------------------------
+          # Verify sitemap
+          # --------------------------------------
           verify = requests.get(
               endpoint,
               headers={
@@ -103,7 +121,7 @@ jobs:
           print("Verification HTTP:", verify.status_code)
 
           if verify.status_code == 200:
-              print("SUCCESS: Google Search Console accepted the sitemap.")
+              print("SUCCESS: Sitemap verification completed.")
               print(verify.text[:4000])
           else:
               print("Verification response:")
@@ -111,156 +129,82 @@ jobs:
 
           PY
 
-      # =========================================================
-      # 3) Read the real Blogger sitemap and collect URLs
-      # =========================================================
-      - name: Extract URLs from Blogger Sitemap
+      # ==========================================
+      # 3. Read Blogger sitemap
+      # ==========================================
+      - name: Verify Blogger Sitemap
         run: |
           python - <<'PY'
           import requests
           import xml.etree.ElementTree as ET
 
-          ROOT = "https://promixt.blogspot.com/sitemap.xml"
+          SITEMAP = "https://promixt.blogspot.com/sitemap.xml"
 
-          seen_sitemaps = set()
-          urls = set()
+          print("==========================================")
+          print("BLOGGER SITEMAP")
+          print("==========================================")
+          print("URL:", SITEMAP)
 
-          def fetch_sitemap(url):
-              if url in seen_sitemaps:
-                  return
-
-              seen_sitemaps.add(url)
-
-              print("Reading sitemap:", url)
-
-              r = requests.get(
-                  url,
-                  headers={"User-Agent": "Promixt-Indexer/1.0"},
-                  timeout=60
-              )
-
-              r.raise_for_status()
-
-              root = ET.fromstring(r.content)
-
-              namespace = "{http://www.sitemaps.org/schemas/sitemap/0.9}"
-
-              # Sitemap index
-              for loc in root.findall(
-                  ".//" + namespace + "sitemap/" + namespace + "loc"
-              ):
-                  if loc.text:
-                      fetch_sitemap(loc.text.strip())
-
-              # Normal URL sitemap
-              for loc in root.findall(
-                  ".//" + namespace + "url/" + namespace + "loc"
-              ):
-                  if loc.text:
-                      urls.add(loc.text.strip())
-
-          fetch_sitemap(ROOT)
-
-          # Keep only Promixt URLs
-          urls = sorted(
-              u for u in urls
-              if u.startswith("https://promixt.blogspot.com/")
+          response = requests.get(
+              SITEMAP,
+              headers={
+                  "User-Agent": "Promixt-Google-Indexer/1.0"
+              },
+              timeout=60
           )
 
-          print("==========================================")
-          print("URLS FOUND:", len(urls))
-          print("==========================================")
+          print("Sitemap HTTP:", response.status_code)
 
-          with open("/tmp/promixt_urls.txt", "w", encoding="utf-8") as f:
-              for url in urls:
-                  f.write(url + "\n")
+          if response.status_code != 200:
+              raise SystemExit(
+                  "ERROR: Blogger sitemap could not be reached."
+              )
 
-          for url in urls[:20]:
-              print(url)
+          try:
+              root = ET.fromstring(response.content)
+              print("XML: Valid")
+          except Exception as e:
+              raise SystemExit(
+                  "ERROR: Sitemap XML is invalid: " + str(e)
+              )
+
+          namespace = "{http://www.sitemaps.org/schemas/sitemap/0.9}"
+
+          urls = []
+
+          # Normal URL sitemap
+          for loc in root.findall(
+              ".//" + namespace + "url/" + namespace + "loc"
+          ):
+              if loc.text:
+                  urls.append(loc.text.strip())
+
+          # Sitemap index
+          sitemap_children = []
+
+          for loc in root.findall(
+              ".//" + namespace + "sitemap/" + namespace + "loc"
+          ):
+              if loc.text:
+                  sitemap_children.append(loc.text.strip())
+
+          print("URLs directly in sitemap:", len(urls))
+          print("Child sitemaps:", len(sitemap_children))
+
+          print("")
+          print("Blogger sitemap is reachable and valid.")
+          print("")
 
           PY
 
-      # =========================================================
-      # 4) Send REAL URLs to Bing IndexNow
-      # =========================================================
-      - name: Submit URLs to Bing IndexNow
-        env:
-          INDEXNOW_KEY: ${{ secrets.INDEXNOW_KEY }}
-        run: |
-          python - <<'PY'
-          import json
-          import requests
-
-          HOST = "promixt.blogspot.com"
-          KEY = "${{ secrets.INDEXNOW_KEY }}"
-          ENDPOINT = "https://api.indexnow.org/indexnow"
-
-          with open("/tmp/promixt_urls.txt", "r", encoding="utf-8") as f:
-              urls = [
-                  line.strip()
-                  for line in f
-                  if line.strip()
-              ]
-
-          print("==========================================")
-          print("INDEXNOW")
-          print("URLs found:", len(urls))
-          print("==========================================")
-
-          # IndexNow accepts a URL list.
-          # Send in batches to keep requests manageable.
-          BATCH_SIZE = 100
-
-          total = 0
-
-          for start in range(0, len(urls), BATCH_SIZE):
-              batch = urls[start:start + BATCH_SIZE]
-
-              payload = {
-                  "host": HOST,
-                  "key": KEY,
-                  "urlList": batch
-              }
-
-              response = requests.post(
-                  ENDPOINT,
-                  headers={
-                      "Content-Type": "application/json; charset=utf-8"
-                  },
-                  data=json.dumps(payload),
-                  timeout=60
-              )
-
-              print(
-                  "Batch",
-                  (start // BATCH_SIZE) + 1,
-                  "- URLs:",
-                  len(batch),
-                  "- HTTP:",
-                  response.status_code
-              )
-
-              if response.status_code not in (200, 202):
-                  print(response.text)
-                  raise SystemExit(
-                      "ERROR: IndexNow submission failed."
-                  )
-
-              total += len(batch)
-
-          print("==========================================")
-          print("INDEXNOW SUBMITTED:", total)
-          print("==========================================")
-
-          PY
-
-      # =========================================================
-      # 5) Finish
-      # =========================================================
+      # ==========================================
+      # 4. Finish
+      # ==========================================
       - name: Finish
         run: |
           echo "=========================================="
-          echo "PROMIXT INDEXING WORKFLOW COMPLETED"
+          echo "PROMIXT GOOGLE INDEXING COMPLETED"
           echo "=========================================="
           echo "Google Search Console: Sitemap submitted"
-          echo "Bing IndexNow: Real URLs submitted"
+          echo "Blogger Sitemap: Verified"
+          echo "Bing/IndexNow: Skipped"
