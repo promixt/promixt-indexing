@@ -1,0 +1,31 @@
+name: Promixt Indexing
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 * * * *"
+
+jobs:
+  indexing:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Send Promixt to IndexNow
+        env:
+          INDEXNOW_KEY: ${{ secrets.INDEXNOW_KEY }}
+        run: |
+          curl -i -X POST "https://api.indexnow.org/indexnow" \
+            -H "Content-Type: application/json; charset=utf-8" \
+            --data "{\"host\":\"promixt.blogspot.com\",\"key\":\"$INDEXNOW_KEY\",\"urlList\":[\"https://promixt.blogspot.com/\"]}"
+
+      - name: Submit Promixt Sitemap to Google Search Console
+        env:
+          GOOGLE_CLIENT_EMAIL: ${{ secrets.GOOGLE_CLIENT_EMAIL }}
+          GOOGLE_PRIVATE_KEY: ${{ secrets.GOOGLE_PRIVATE_KEY }}
+        run: |
+          python - <<'PY'
+          import os
+          print("Google Search Console credentials loaded.")
+          print("Client:", os.environ["GOOGLE_CLIENT_EMAIL"])
+          print("Google private key loaded:", bool(os.environ["GOOGLE_PRIVATE_KEY"]))
+          PY
